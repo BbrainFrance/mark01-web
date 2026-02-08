@@ -63,13 +63,14 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { message } = await req.json();
+    const { message, source } = await req.json();
 
     if (!message || typeof message !== "string" || !message.trim()) {
       return NextResponse.json({ error: "Message vide" }, { status: 400 });
     }
 
-    const msgId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const msgSource = source === "APPEL" ? "APPEL" : "WEB";
+    const msgId = `${msgSource.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     // Sauvegarder le message utilisateur dans l'historique VPS
     await fetch(`${MARK01_API_URL}/chat-history`, {
@@ -78,7 +79,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         message: {
           id: msgId,
-          source: "WEB",
+          source: msgSource,
           userMessage: message.trim(),
           jarvisResponse: "",
           timestamp: Date.now(),
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           prompt: message.trim(),
           mode: "text",
-          response_format: "text",
+          response_format: msgSource === "APPEL" ? "tts" : "text",
         }),
       });
 

@@ -4,13 +4,42 @@ import { useState, useEffect, useRef, useCallback } from "react";
 
 interface ChatMessage {
   id: string;
-  source: "TEXTE" | "VOCAL" | "WEB";
+  source: "TEXTE" | "VOCAL" | "WEB" | "APPEL";
   userMessage: string;
   jarvisResponse: string;
   timestamp: number;
 }
 
 type AuthStep = "password" | "otp" | "authenticated";
+type CallState = "idle" | "listening" | "thinking" | "speaking";
+
+// Extend Window for SpeechRecognition
+interface SpeechRecognitionEvent {
+  results: { [key: number]: { [key: number]: { transcript: string } }; length: number };
+  resultIndex: number;
+}
+interface SpeechRecognitionErrorEvent {
+  error: string;
+}
+interface SpeechRecognitionInstance {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  onspeechend: (() => void) | null;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: new () => SpeechRecognitionInstance;
+    webkitSpeechRecognition: new () => SpeechRecognitionInstance;
+  }
+}
 
 export default function Home() {
   // Auth state
@@ -27,6 +56,15 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+
+  // Call mode state
+  const [callActive, setCallActive] = useState(false);
+  const [callState, setCallState] = useState<CallState>("idle");
+  const [callTranscript, setCallTranscript] = useState("");
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const synthRef = useRef<SpeechSynthesis | null>(null);
+  const callActiveRef = useRef(false);
+  const callLoopRunning = useRef(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -203,8 +241,205 @@ export default function Home() {
     inputRef.current?.focus();
   }
 
+  // ===================== CALL MODE =====================
+
+  // Init speech synthesis
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      synthRef.current = window.speechSynthesis;
+    }
+  }, []);
+
+  // TTS: prononcer un texte et attendre la fin
+  function speakText(text: string): Promise<void> {
+    return new Promise((resolve) => {
+      const synth = synthRef.current;
+      if (!synth) { resolve(); return; }
+
+      synth.cancel(); // Couper tout TTS en cours
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "fr-FR";
+      utterance.rate = 1.05;
+      utterance.pitch = 0.9;
+
+      // Selectionner une voix francaise
+      const voices = synth.getVoices();
+      const frVoice = voices.find(v => v.lang.startsWith("fr") && v.localService) ||
+                      voices.find(v => v.lang.startsWith("fr"));
+      if (frVoice) utterance.voice = frVoice;
+
+      utterance.onend = () => resolve();
+      utterance.onerror = () => resolve();
+      synth.speak(utterance);
+    });
+  }
+
+  // STT: ecouter une commande vocale (retourne le texte reconnu)
+  function listenForSpeech(): Promise<string | null> {
+    return new Promise((resolve) => {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) { resolve(null); return; }
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = "fr-FR";
+      recognitionRef.current = recognition;
+
+      let resolved = false;
+      const done = (val: string | null) => {
+        if (!resolved) { resolved = true; resolve(val); }
+      };
+
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        const last = event.results.length - 1;
+        const transcript = event.results[last][0].transcript;
+        setCallTranscript(transcript);
+        done(transcript);
+      };
+
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        if (event.error === "no-speech" || event.error === "aborted") {
+          done(null);
+        } else {
+          done(null);
+        }
+      };
+
+      recognition.onend = () => {
+        done(null);
+      };
+
+      try {
+        recognition.start();
+      } catch {
+        done(null);
+      }
+    });
+  }
+
+  // Boucle principale du mode appel
+  async function callModeLoop(token: string) {
+    if (callLoopRunning.current) return;
+    callLoopRunning.current = true;
+
+    try {
+      while (callActiveRef.current) {
+        // Ecouter
+        setCallState("listening");
+        setCallTranscript("");
+        const command = await listenForSpeech();
+
+        if (!callActiveRef.current) break;
+
+        if (!command || !command.trim()) {
+          // Silence, re-ecouter
+          continue;
+        }
+
+        // Detecter les commandes de fin
+        const lower = command.trim().toLowerCase();
+        if (["raccroche", "raccroche.", "fin d'appel", "stop appel",
+             "au revoir", "termine", "arrête", "arrête l'appel",
+             "arrete", "arrete l'appel"].includes(lower)) {
+          setCallState("speaking");
+          await speakText("D'accord, a plus tard.");
+          endCallMode();
+          return;
+        }
+
+        // Afficher le message
+        const msgId = `appel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const newMsg: ChatMessage = {
+          id: msgId,
+          source: "APPEL",
+          userMessage: command.trim(),
+          jarvisResponse: "",
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, newMsg]);
+
+        // Envoyer a Jarvis
+        setCallState("thinking");
+
+        try {
+          const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ message: command.trim(), source: "APPEL" }),
+          });
+
+          if (!callActiveRef.current) break;
+
+          const data = await res.json();
+          const response = res.ok ? (data.response || "Pas de reponse.") : "Erreur.";
+
+          // Mettre a jour le message
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === msgId ? { ...m, jarvisResponse: response } : m
+            )
+          );
+
+          // Prononcer la reponse
+          if (callActiveRef.current) {
+            setCallState("speaking");
+            await speakText(response);
+          }
+        } catch {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === msgId ? { ...m, jarvisResponse: "Erreur de connexion." } : m
+            )
+          );
+        }
+      }
+    } finally {
+      callLoopRunning.current = false;
+    }
+  }
+
+  // Demarrer le mode appel
+  function startCallMode() {
+    if (!authToken) return;
+    callActiveRef.current = true;
+    setCallActive(true);
+    setCallState("listening");
+
+    // Confirmation vocale puis lancer la boucle
+    speakText("Mode appel active. Je t'ecoute.").then(() => {
+      callModeLoop(authToken);
+    });
+  }
+
+  // Arreter le mode appel
+  function endCallMode() {
+    callActiveRef.current = false;
+    setCallActive(false);
+    setCallState("idle");
+    setCallTranscript("");
+
+    // Couper le STT et TTS en cours
+    recognitionRef.current?.abort();
+    synthRef.current?.cancel();
+  }
+
+  // Toggle mode appel
+  function toggleCallMode() {
+    if (callActive) {
+      endCallMode();
+    } else {
+      startCallMode();
+    }
+  }
+
   // Logout
   function handleLogout() {
+    endCallMode();
     localStorage.removeItem("mark01_token");
     setAuthToken(null);
     setAuthStep("password");
@@ -251,6 +486,7 @@ export default function Home() {
       case "VOCAL": return "bg-purple-500/20 text-purple-400";
       case "TEXTE": return "bg-blue-500/20 text-blue-400";
       case "WEB": return "bg-emerald-500/20 text-emerald-400";
+      case "APPEL": return "bg-orange-500/20 text-orange-400";
       default: return "bg-gray-500/20 text-gray-400";
     }
   }
@@ -370,20 +606,65 @@ export default function Home() {
             <span className="text-lg font-bold text-white">J</span>
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-white">JARVIS</h1>
+            <h1 className="text-sm font-semibold text-white">
+              {callActive ? "APPEL EN COURS" : "JARVIS"}
+            </h1>
             <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-[var(--success-green)] animate-pulse-dot" />
-              <span className="text-xs text-[var(--jarvis-muted)]">En ligne</span>
+              <div className={`w-2 h-2 rounded-full ${callActive ? "bg-[var(--error-red)] animate-pulse-dot" : "bg-[var(--success-green)] animate-pulse-dot"}`} />
+              <span className="text-xs text-[var(--jarvis-muted)]">
+                {callActive
+                  ? callState === "listening" ? "Ecoute..."
+                  : callState === "thinking" ? "Reflexion..."
+                  : callState === "speaking" ? "Parle..."
+                  : "En ligne"
+                  : "En ligne"}
+              </span>
             </div>
           </div>
         </div>
-        <button
-          onClick={handleLogout}
-          className="text-xs text-[var(--jarvis-muted)] hover:text-white px-3 py-1.5 rounded-lg hover:bg-[var(--jarvis-border)] transition-colors"
-        >
-          Deconnexion
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleLogout}
+            className="text-xs text-[var(--jarvis-muted)] hover:text-white px-3 py-1.5 rounded-lg hover:bg-[var(--jarvis-border)] transition-colors"
+          >
+            Deconnexion
+          </button>
+        </div>
       </header>
+
+      {/* Call mode overlay */}
+      {callActive && (
+        <div className="bg-[var(--jarvis-dark)] border-b border-[var(--jarvis-border)] px-4 py-6 flex flex-col items-center gap-3">
+          <div className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl transition-all ${
+            callState === "listening" ? "bg-[var(--success-green)]/20 ring-4 ring-[var(--success-green)]/30 animate-pulse" :
+            callState === "thinking" ? "bg-[var(--jarvis-blue)]/20 ring-4 ring-[var(--jarvis-blue)]/30" :
+            callState === "speaking" ? "bg-purple-500/20 ring-4 ring-purple-500/30 animate-pulse" :
+            "bg-[var(--jarvis-card)]"
+          }`}>
+            {callState === "listening" ? "🎙️" : callState === "thinking" ? "🧠" : callState === "speaking" ? "🔊" : "📞"}
+          </div>
+          <p className="text-sm text-[var(--jarvis-muted)]">
+            {callState === "listening" ? "Je vous ecoute..." :
+             callState === "thinking" ? "Reflexion en cours..." :
+             callState === "speaking" ? "Jarvis repond..." :
+             "Mode appel actif"}
+          </p>
+          {callTranscript && callState === "listening" && (
+            <p className="text-xs text-[var(--jarvis-text)] bg-[var(--jarvis-card)] px-3 py-1.5 rounded-lg max-w-xs text-center">
+              {callTranscript}
+            </p>
+          )}
+          <button
+            onClick={endCallMode}
+            className="mt-2 px-6 py-2.5 bg-[var(--error-red)] hover:bg-red-700 rounded-full text-white font-medium text-sm transition-colors flex items-center gap-2"
+          >
+            <span>📞</span> Raccrocher
+          </button>
+          <p className="text-[10px] text-[var(--jarvis-muted)]">
+            Dites &quot;raccroche&quot; ou &quot;au revoir&quot; pour terminer
+          </p>
+        </div>
+      )}
 
       {/* Chat area */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
@@ -457,19 +738,32 @@ export default function Home() {
         onSubmit={handleSend}
         className="flex items-center gap-2 p-3 border-t border-[var(--jarvis-border)] bg-[var(--jarvis-card)]"
       >
+        {/* Bouton Appel */}
+        <button
+          type="button"
+          onClick={toggleCallMode}
+          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all shrink-0 ${
+            callActive
+              ? "bg-[var(--error-red)] text-white animate-pulse"
+              : "bg-[var(--jarvis-dark)] text-[var(--success-green)] border border-[var(--success-green)]/30 hover:border-[var(--success-green)] hover:bg-[var(--success-green)]/10"
+          }`}
+          title={callActive ? "Raccrocher" : "Mode Appel"}
+        >
+          📞
+        </button>
         <input
           ref={inputRef}
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ecrivez a Jarvis..."
-          disabled={sending}
+          disabled={sending || callActive}
           className="flex-1 px-4 py-2.5 bg-[var(--jarvis-dark)] border border-[var(--jarvis-border)] rounded-xl text-white placeholder:text-[var(--jarvis-muted)] focus:outline-none focus:border-[var(--jarvis-blue)] transition-colors disabled:opacity-50"
           autoFocus
         />
         <button
           type="submit"
-          disabled={sending || !input.trim()}
+          disabled={sending || !input.trim() || callActive}
           className="px-5 py-2.5 bg-[var(--jarvis-blue)] hover:bg-blue-600 disabled:opacity-30 rounded-xl text-white font-medium transition-colors"
         >
           {sending ? "..." : "Envoyer"}

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getOTP, deleteOTP, incrementAttempts } from "@/lib/otp-store";
+import { verifyOTPToken } from "@/lib/otp-token";
 import { createToken } from "@/lib/auth";
 
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "@eb80114!";
 
 export async function POST(req: NextRequest) {
   try {
-    const { otp, password } = await req.json();
+    const { otp, password, otpToken } = await req.json();
 
     // Re-valider le mot de passe
     if (password !== AUTH_PASSWORD) {
@@ -17,41 +17,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Code invalide" }, { status: 400 });
     }
 
-    const stored = getOTP();
-
-    if (!stored) {
+    if (!otpToken) {
       return NextResponse.json(
-        { error: "Aucun code en attente. Recommencez la connexion." },
+        { error: "Session expiree. Recommencez la connexion." },
         { status: 401 }
       );
     }
 
-    // Trop de tentatives
-    const attempts = incrementAttempts();
-    if (attempts > 5) {
-      deleteOTP();
-      return NextResponse.json(
-        { error: "Trop de tentatives. Redemandez un code." },
-        { status: 429 }
-      );
-    }
+    // Decoder le token OTP pour recuperer le vrai code
+    const expectedCode = await verifyOTPToken(otpToken);
 
-    // Code expire
-    if (Date.now() > stored.expiresAt) {
-      deleteOTP();
+    if (!expectedCode) {
       return NextResponse.json(
-        { error: "Code expire. Redemandez un code." },
+        { error: "Code expire. Recommencez la connexion." },
         { status: 401 }
       );
     }
 
-    // Mauvais code
-    if (otp !== stored.code) {
+    if (otp !== expectedCode) {
       return NextResponse.json({ error: "Code incorrect" }, { status: 401 });
     }
 
-    // Succes!
-    deleteOTP();
+    // Succes! Emettre le JWT de session (7 jours)
     const token = await createToken();
 
     return NextResponse.json({ token, message: "Authentifie" });

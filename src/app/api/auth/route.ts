@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { setOTP } from "@/lib/otp-store";
+import { createOTPToken } from "@/lib/otp-token";
 
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "@eb80114!";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -28,7 +28,6 @@ export async function POST(req: NextRequest) {
     const { password } = await req.json();
 
     if (password !== AUTH_PASSWORD) {
-      // Incrementer les tentatives
       const e = attempts.get(ip) || { count: 0, blockedUntil: 0 };
       e.count++;
       if (e.count >= 5) {
@@ -42,12 +41,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Reset tentatives
     attempts.delete(ip);
 
     // Generer OTP 6 chiffres
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setOTP(code);
+
+    // Encoder l'OTP dans un token signe (pour contourner le serverless stateless)
+    const otpToken = await createOTPToken(code);
 
     // Envoyer via Telegram
     const sent = await sendTelegramOTP(code);
@@ -58,7 +58,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ message: "Code envoye sur Telegram" });
+    // Retourner le token OTP au client (le code est chiffre dedans)
+    return NextResponse.json({
+      message: "Code envoye sur Telegram",
+      otpToken,
+    });
   } catch {
     return NextResponse.json({ error: "Requete invalide" }, { status: 400 });
   }

@@ -18,6 +18,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
   const [authToken, setAuthToken] = useState<string | null>(null);
+  const [otpToken, setOtpToken] = useState<string | null>(null);
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
@@ -80,6 +81,7 @@ export default function Home() {
       const data = await res.json();
 
       if (res.ok) {
+        setOtpToken(data.otpToken);
         setAuthStep("otp");
       } else {
         setAuthError(data.error || "Mot de passe incorrect");
@@ -100,7 +102,7 @@ export default function Home() {
       const res = await fetch("/api/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ otp, password }),
+        body: JSON.stringify({ otp, password, otpToken }),
       });
       const data = await res.json();
 

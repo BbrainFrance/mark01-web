@@ -9,7 +9,7 @@ const headers = {
   "Content-Type": "application/json",
 };
 
-// GET - Recuperer l'historique depuis le VPS
+// GET - Recuperer l'historique (mark01-api + openclaw)
 export async function GET(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace("Bearer ", "");
   if (!token || !(await verifyToken(token))) {
@@ -17,14 +17,39 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const res = await fetch(`${MARK01_API_URL}/chat-history`, { headers });
+    // Recuperer les deux sources en parallele
+    const [localRes, openclawRes] = await Promise.allSettled([
+      fetch(`${MARK01_API_URL}/chat-history`, { headers }),
+      fetch(`${MARK01_API_URL}/openclaw-history`, { headers }),
+    ]);
 
-    if (res.ok) {
-      const data = await res.json();
-      return NextResponse.json({ messages: data.messages || [] });
-    } else {
-      return NextResponse.json({ messages: [] });
+    const localMessages =
+      localRes.status === "fulfilled" && localRes.value.ok
+        ? (await localRes.value.json()).messages || []
+        : [];
+
+    const openclawMessages =
+      openclawRes.status === "fulfilled" && openclawRes.value.ok
+        ? (await openclawRes.value.json()).messages || []
+        : [];
+
+    // Fusionner et dedupliquer par timestamp + userMessage
+    const seen = new Set<string>();
+    const all = [...openclawMessages, ...localMessages];
+    const unique = [];
+
+    for (const msg of all) {
+      const key = `${msg.timestamp}-${msg.userMessage?.slice(0, 50)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(msg);
+      }
     }
+
+    // Trier par timestamp
+    unique.sort((a: { timestamp: number }, b: { timestamp: number }) => a.timestamp - b.timestamp);
+
+    return NextResponse.json({ messages: unique });
   } catch {
     return NextResponse.json({ messages: [] });
   }

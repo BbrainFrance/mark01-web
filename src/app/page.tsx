@@ -243,11 +243,78 @@ export default function Home() {
 
   // ===================== CALL MODE =====================
 
-  // Init speech synthesis
+  // Init speech synthesis + precharger les voix
+  const jarvisVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
+
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      synthRef.current = window.speechSynthesis;
+    if (typeof window === "undefined") return;
+    synthRef.current = window.speechSynthesis;
+
+    function selectBestVoice() {
+      const synth = synthRef.current;
+      if (!synth) return;
+      const voices = synth.getVoices();
+      if (voices.length === 0) return;
+
+      // Filtrer les voix fr-FR
+      const frFR = voices.filter(v => v.lang === "fr-FR");
+      const frAll = voices.filter(v => v.lang.startsWith("fr"));
+
+      // Log pour debug
+      console.log("[Jarvis TTS] Voix disponibles:", frAll.map(v =>
+        `${v.name} (${v.lang}, ${v.localService ? "local" : "reseau"})`
+      ));
+
+      // Priorite 1 : Voix reseau Google fr-FR (la plus naturelle)
+      const googleNetwork = frFR.find(v =>
+        v.name.toLowerCase().includes("google") && !v.localService
+      );
+      if (googleNetwork) {
+        jarvisVoiceRef.current = googleNetwork;
+        console.log("[Jarvis TTS] Selectionnee:", googleNetwork.name, "(Google reseau)");
+        return;
+      }
+
+      // Priorite 2 : N'importe quelle voix reseau fr-FR (plus naturelle que locale)
+      const anyNetwork = frFR.find(v => !v.localService);
+      if (anyNetwork) {
+        jarvisVoiceRef.current = anyNetwork;
+        console.log("[Jarvis TTS] Selectionnee:", anyNetwork.name, "(reseau)");
+        return;
+      }
+
+      // Priorite 3 : Voix locale fr-FR avec noms preferes (masculin / meilleure qualite)
+      const preferredKeywords = ["male", "homme", "thomas", "pierre", "nicolas", "mathieu"];
+      const preferredLocal = frFR.find(v =>
+        preferredKeywords.some(k => v.name.toLowerCase().includes(k))
+      );
+      if (preferredLocal) {
+        jarvisVoiceRef.current = preferredLocal;
+        console.log("[Jarvis TTS] Selectionnee:", preferredLocal.name, "(locale preferee)");
+        return;
+      }
+
+      // Priorite 4 : Premiere voix fr-FR locale
+      if (frFR.length > 0) {
+        jarvisVoiceRef.current = frFR[0];
+        console.log("[Jarvis TTS] Selectionnee:", frFR[0].name, "(fr-FR fallback)");
+        return;
+      }
+
+      // Priorite 5 : N'importe quelle voix francaise
+      if (frAll.length > 0) {
+        jarvisVoiceRef.current = frAll[0];
+        console.log("[Jarvis TTS] Selectionnee:", frAll[0].name, "(fr fallback)");
+      }
     }
+
+    // Les voix peuvent ne pas etre chargees immediatement
+    selectBestVoice();
+    window.speechSynthesis.onvoiceschanged = selectBestVoice;
+
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null;
+    };
   }, []);
 
   // TTS: prononcer un texte et attendre la fin
@@ -261,13 +328,12 @@ export default function Home() {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = "fr-FR";
       utterance.rate = 1.05;
-      utterance.pitch = 0.9;
+      utterance.pitch = 0.95;
 
-      // Selectionner une voix francaise
-      const voices = synth.getVoices();
-      const frVoice = voices.find(v => v.lang.startsWith("fr") && v.localService) ||
-                      voices.find(v => v.lang.startsWith("fr"));
-      if (frVoice) utterance.voice = frVoice;
+      // Utiliser la voix preselectionnee
+      if (jarvisVoiceRef.current) {
+        utterance.voice = jarvisVoiceRef.current;
+      }
 
       utterance.onend = () => resolve();
       utterance.onerror = () => resolve();

@@ -50,3 +50,179 @@ body {
 }
 .typing-dot:nth-child(2) { animation-delay: 0.2s; }
 .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* ==========================================
+   JARVIS ORB - Orbe animee
+   ========================================== */
+
+.jarvis-orb {
+  position: relative;
+  width: 140px;
+  height: 140px;
+}
+
+/* Coeur de l'orbe */
+.jarvis-orb-core {
+  position: absolute;
+  inset: 28%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, #80e8ff, #00d4ff, #005a9e);
+  box-shadow: 0 0 30px rgba(0, 212, 255, 0.3), inset 0 -4px 12px rgba(0, 0, 0, 0.3);
+  transition: background 0.6s ease, box-shadow 0.6s ease;
+}
+
+/* Anneaux */
+.jarvis-orb-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+.jarvis-orb-ring-2 {
+  position: absolute;
+  inset: -12%;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+}
+.jarvis-orb-ring-3 {
+  position: absolute;
+  inset: -24%;
+  border-radius: 50%;
+  border: 1px solid transparent;
+}
+
+/* Halo */
+.jarvis-orb-glow {
+  position: absolute;
+  inset: -30%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 212, 255, 0.15), transparent 70%);
+  transition: background 0.6s ease;
+}
+
+/* --- IDLE --- */
+.orb-idle .jarvis-orb-core {
+  animation: orb-breathe 3s ease-in-out infinite;
+}
+.orb-idle .jarvis-orb-glow {
+  animation: orb-glow-breathe 3s ease-in-out infinite;
+}
+
+/* --- LISTENING --- */
+.orb-listening .jarvis-orb-core {
+  background: radial-gradient(circle at 38% 32%, #80ffcc, #00e676, #008a4c);
+  box-shadow: 0 0 40px rgba(0, 230, 118, 0.4), inset 0 -4px 12px rgba(0, 0, 0, 0.3);
+  animation: orb-pulse-listen 1.5s ease-in-out infinite;
+}
+.orb-listening .jarvis-orb-ring {
+  border-color: rgba(0, 230, 118, 0.4);
+  animation: orb-sonar 2s ease-out infinite;
+}
+.orb-listening .jarvis-orb-ring-2 {
+  border-color: rgba(0, 230, 118, 0.25);
+  animation: orb-sonar 2s ease-out 0.5s infinite;
+}
+.orb-listening .jarvis-orb-ring-3 {
+  border-color: rgba(0, 230, 118, 0.15);
+  animation: orb-sonar 2s ease-out 1s infinite;
+}
+.orb-listening .jarvis-orb-glow {
+  background: radial-gradient(circle, rgba(0, 230, 118, 0.2), transparent 70%);
+  animation: orb-glow-breathe 1.5s ease-in-out infinite;
+}
+
+/* --- THINKING --- */
+.orb-thinking .jarvis-orb-core {
+  animation: orb-breathe 2s ease-in-out infinite;
+}
+.orb-thinking .jarvis-orb-ring {
+  border: 3px solid transparent;
+  border-top-color: rgba(0, 212, 255, 0.6);
+  border-right-color: rgba(0, 212, 255, 0.25);
+  animation: orb-spin 1.5s linear infinite;
+}
+.orb-thinking .jarvis-orb-ring-2 {
+  border: 2px solid transparent;
+  border-bottom-color: rgba(0, 212, 255, 0.4);
+  border-left-color: rgba(0, 212, 255, 0.15);
+  animation: orb-spin-reverse 2s linear infinite;
+}
+.orb-thinking .jarvis-orb-ring-3 {
+  border: 1.5px solid transparent;
+  border-top-color: rgba(0, 212, 255, 0.2);
+  animation: orb-spin 3s linear infinite;
+}
+.orb-thinking .jarvis-orb-glow {
+  animation: orb-glow-breathe 2s ease-in-out infinite;
+}
+
+/* --- SPEAKING --- */
+.orb-speaking .jarvis-orb-core {
+  background: radial-gradient(circle at 38% 32%, #e0c0ff, #bb86fc, #7c3aed);
+  box-shadow: 0 0 50px rgba(187, 134, 252, 0.5), inset 0 -4px 12px rgba(0, 0, 0, 0.3);
+  animation: orb-speak 0.6s ease-in-out infinite;
+}
+.orb-speaking .jarvis-orb-ring {
+  border-color: rgba(187, 134, 252, 0.35);
+  animation: orb-wave 0.8s ease-in-out infinite;
+}
+.orb-speaking .jarvis-orb-ring-2 {
+  border-color: rgba(187, 134, 252, 0.2);
+  animation: orb-wave 0.8s ease-in-out 0.15s infinite;
+}
+.orb-speaking .jarvis-orb-ring-3 {
+  border-color: rgba(187, 134, 252, 0.12);
+  animation: orb-wave 0.8s ease-in-out 0.3s infinite;
+}
+.orb-speaking .jarvis-orb-glow {
+  background: radial-gradient(circle, rgba(187, 134, 252, 0.2), transparent 70%);
+  animation: orb-glow-speak 0.6s ease-in-out infinite;
+}
+
+/* ---- Keyframes ---- */
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+@keyframes orb-glow-breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes orb-pulse-listen {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+@keyframes orb-sonar {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+@keyframes orb-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orb-spin-reverse {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+@keyframes orb-speak {
+  0%, 100% { transform: scale(1); }
+  30% { transform: scale(1.12); }
+  60% { transform: scale(0.95); }
+}
+
+@keyframes orb-wave {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.15); opacity: 0.2; }
+}
+
+@keyframes orb-glow-speak {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}

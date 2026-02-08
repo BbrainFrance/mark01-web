@@ -632,36 +632,42 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Call mode overlay */}
+      {/* Call mode overlay with animated orb */}
       {callActive && (
-        <div className="bg-[var(--jarvis-dark)] border-b border-[var(--jarvis-border)] px-4 py-6 flex flex-col items-center gap-3">
-          <div className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl transition-all ${
-            callState === "listening" ? "bg-[var(--success-green)]/20 ring-4 ring-[var(--success-green)]/30 animate-pulse" :
-            callState === "thinking" ? "bg-[var(--jarvis-blue)]/20 ring-4 ring-[var(--jarvis-blue)]/30" :
-            callState === "speaking" ? "bg-purple-500/20 ring-4 ring-purple-500/30 animate-pulse" :
-            "bg-[var(--jarvis-card)]"
+        <div className="bg-[var(--jarvis-dark)] border-b border-[var(--jarvis-border)] px-4 py-8 flex flex-col items-center gap-4">
+          {/* Orbe Jarvis */}
+          <div className={`jarvis-orb ${
+            callState === "listening" ? "orb-listening" :
+            callState === "thinking" ? "orb-thinking" :
+            callState === "speaking" ? "orb-speaking" :
+            "orb-idle"
           }`}>
-            {callState === "listening" ? "🎙️" : callState === "thinking" ? "🧠" : callState === "speaking" ? "🔊" : "📞"}
+            <div className="jarvis-orb-glow" />
+            <div className="jarvis-orb-ring-3" />
+            <div className="jarvis-orb-ring-2" />
+            <div className="jarvis-orb-ring" />
+            <div className="jarvis-orb-core" />
           </div>
-          <p className="text-sm text-[var(--jarvis-muted)]">
+
+          <p className="text-sm text-[var(--jarvis-muted)] mt-2">
             {callState === "listening" ? "Je vous ecoute..." :
              callState === "thinking" ? "Reflexion en cours..." :
              callState === "speaking" ? "Jarvis repond..." :
              "Mode appel actif"}
           </p>
           {callTranscript && callState === "listening" && (
-            <p className="text-xs text-[var(--jarvis-text)] bg-[var(--jarvis-card)] px-3 py-1.5 rounded-lg max-w-xs text-center">
-              {callTranscript}
+            <p className="text-xs text-[var(--jarvis-text)] bg-[var(--jarvis-card)] px-4 py-2 rounded-xl max-w-sm text-center border border-[var(--jarvis-border)]">
+              &laquo; {callTranscript} &raquo;
             </p>
           )}
           <button
             onClick={endCallMode}
-            className="mt-2 px-6 py-2.5 bg-[var(--error-red)] hover:bg-red-700 rounded-full text-white font-medium text-sm transition-colors flex items-center gap-2"
+            className="mt-1 px-6 py-2.5 bg-[var(--error-red)] hover:bg-red-700 rounded-full text-white font-medium text-sm transition-colors"
           >
-            <span>📞</span> Raccrocher
+            Raccrocher
           </button>
           <p className="text-[10px] text-[var(--jarvis-muted)]">
-            Dites &quot;raccroche&quot; ou &quot;au revoir&quot; pour terminer
+            Dites &laquo; raccroche &raquo; ou &laquo; au revoir &raquo; pour terminer
           </p>
         </div>
       )}

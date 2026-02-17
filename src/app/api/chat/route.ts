@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyToken } from "@/lib/auth";
+import { verifyAuth } from "@/lib/auth";
 
 const MARK2_API_URL = process.env.MARK2_API_URL || process.env.MARK01_API_URL || "http://76.13.42.188:3456";
 const MARK2_API_KEY = process.env.MARK2_API_KEY || process.env.MARK01_API_KEY || "";
@@ -12,7 +12,7 @@ const mark2Headers = {
 // GET - Recuperer l'historique depuis Mark2
 export async function GET(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace("Bearer ", "");
-  if (!token || !(await verifyToken(token))) {
+  if (!(await verifyAuth(token))) {
     return NextResponse.json({ error: "Non autorise" }, { status: 401 });
   }
 
@@ -66,12 +66,12 @@ export async function GET(req: NextRequest) {
 // POST - Envoyer un message via Mark2
 export async function POST(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace("Bearer ", "");
-  if (!token || !(await verifyToken(token))) {
+  if (!(await verifyAuth(token))) {
     return NextResponse.json({ error: "Non autorise" }, { status: 401 });
   }
 
   try {
-    const { message, source, agentId } = await req.json();
+    const { message, source, agentId, image, imageType } = await req.json();
 
     if (!message || typeof message !== "string" || !message.trim()) {
       return NextResponse.json({ error: "Message vide" }, { status: 400 });
@@ -85,14 +85,20 @@ export async function POST(req: NextRequest) {
     let responseModel = "";
 
     try {
+      const mark2Body: Record<string, string> = {
+        message: message.trim(),
+        agentId: effectiveAgentId,
+        source: msgSource,
+      };
+      if (image) {
+        mark2Body.image = image;
+        mark2Body.imageType = imageType || "image/jpeg";
+      }
+
       const apiResponse = await fetch(`${MARK2_API_URL}/chat`, {
         method: "POST",
         headers: mark2Headers,
-        body: JSON.stringify({
-          message: message.trim(),
-          agentId: effectiveAgentId,
-          source: msgSource,
-        }),
+        body: JSON.stringify(mark2Body),
       });
 
       if (apiResponse.ok) {

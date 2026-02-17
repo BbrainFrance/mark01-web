@@ -20,3 +20,13 @@ export async function verifyToken(token: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Verifie l'authentification via JWT (web) ou cle API Mark2 (Android).
+ */
+export async function verifyAuth(token: string | null | undefined): Promise<boolean> {
+  if (!token) return false;
+  const mark2Key = process.env.MARK2_API_KEY || process.env.MARK01_API_KEY || "";
+  if (mark2Key && token === mark2Key) return true;
+  return verifyToken(token);
+}

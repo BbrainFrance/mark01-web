@@ -10,6 +10,12 @@ interface ChatMessage {
   timestamp: number;
 }
 
+interface Agent {
+  id: string;
+  label: string;
+  description: string;
+}
+
 type AuthStep = "password" | "otp" | "authenticated";
 type CallState = "idle" | "listening" | "thinking" | "speaking";
 
@@ -51,11 +57,20 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
+  // Agent state
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [activeAgentId, setActiveAgentId] = useState("jarvis");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [switchingAgent, setSwitchingAgent] = useState(false);
+
   // Chat state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [pendingImageName, setPendingImageName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Call mode state
   const [callActive, setCallActive] = useState(false);
@@ -84,6 +99,37 @@ export default function Home() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Load agents list
+  async function loadAgents(token: string) {
+    try {
+      const res = await fetch("/api/agents", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const agentList: Agent[] = (data.agents || []).map((a: { id: string; label: string; description?: string }) => ({
+          id: a.id,
+          label: a.label,
+          description: a.description || "",
+        }));
+        setAgents(agentList);
+      }
+    } catch {
+      // Silently fail - sidebar will be empty
+    }
+  }
+
+  // Switch agent
+  async function switchAgent(agentId: string) {
+    if (agentId === activeAgentId || !authToken) return;
+    setSwitchingAgent(true);
+    setActiveAgentId(agentId);
+    setSidebarOpen(false);
+    setMessages([]);
+    await loadChatHistory(authToken, agentId);
+    setSwitchingAgent(false);
+  }
+
   // Verify existing token
   async function verifyToken(token: string) {
     try {
@@ -95,6 +141,7 @@ export default function Home() {
         setAuthToken(token);
         setAuthStep("authenticated");
         setMessages(data.messages || []);
+        loadAgents(token);
       } else {
         localStorage.removeItem("mark01_token");
       }
@@ -149,6 +196,7 @@ export default function Home() {
         setAuthToken(data.token);
         setAuthStep("authenticated");
         loadChatHistory(data.token);
+        loadAgents(data.token);
       } else {
         setAuthError(data.error || "Code invalide");
       }
@@ -159,9 +207,10 @@ export default function Home() {
   }
 
   // Load chat history
-  const loadChatHistory = useCallback(async (token: string) => {
+  const loadChatHistory = useCallback(async (token: string, agentId?: string) => {
+    const effectiveAgentId = agentId || "jarvis";
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch(`/api/chat?agentId=${effectiveAgentId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -174,34 +223,70 @@ export default function Home() {
     setLoadingHistory(false);
   }, []);
 
+  // Handle image selection
+  function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert("Image trop volumineuse (max 10 Mo)");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(",")[1];
+      setPendingImage(base64);
+      setPendingImageName(file.name);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  function clearPendingImage() {
+    setPendingImage(null);
+    setPendingImageName(null);
+  }
+
   // Send message
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim() || sending || !authToken) return;
 
     const userMsg = input.trim();
+    const imageToSend = pendingImage;
+    const imageName = pendingImageName;
     setInput("");
+    setPendingImage(null);
+    setPendingImageName(null);
     setSending(true);
 
     // Ajouter le message utilisateur immediatement
     const tempId = `temp-${Date.now()}`;
+    const displayMsg = imageToSend ? `[${imageName}] ${userMsg}` : userMsg;
     const newMsg: ChatMessage = {
       id: tempId,
       source: "WEB",
-      userMessage: userMsg,
+      userMessage: displayMsg,
       jarvisResponse: "",
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, newMsg]);
 
     try {
+      const bodyPayload: Record<string, string> = { message: userMsg, agentId: activeAgentId };
+      if (imageToSend) {
+        bodyPayload.image = imageToSend;
+        bodyPayload.imageType = "image/jpeg";
+      }
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
-        body: JSON.stringify({ message: userMsg }),
+        body: JSON.stringify(bodyPayload),
       });
 
       const data = await res.json();
@@ -436,7 +521,7 @@ export default function Home() {
               "Content-Type": "application/json",
               Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({ message: command.trim(), source: "APPEL" }),
+            body: JSON.stringify({ message: command.trim(), source: "APPEL", agentId: activeAgentId }),
           });
 
           if (!callActiveRef.current) break;
@@ -662,41 +747,112 @@ export default function Home() {
   // ===================== CHAT VIEW =====================
 
   const dateGroups = groupByDate(messages);
+  const activeAgent = agents.find(a => a.id === activeAgentId);
+  const activeLabel = activeAgent?.label || activeAgentId.charAt(0).toUpperCase() + activeAgentId.slice(1);
+  const activeInitial = activeLabel.charAt(0).toUpperCase();
+
+  // Agent icon colors (deterministic per agent id)
+  function agentColor(id: string) {
+    const colors = [
+      "bg-[var(--jarvis-blue)]", "bg-emerald-600", "bg-purple-600",
+      "bg-orange-600", "bg-pink-600", "bg-teal-600", "bg-indigo-600",
+      "bg-amber-600", "bg-rose-600", "bg-cyan-600",
+    ];
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
+  }
 
   return (
-    <div className="h-screen flex flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-[var(--jarvis-border)] bg-[var(--jarvis-card)]">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-[var(--jarvis-blue)] flex items-center justify-center">
-            <span className="text-lg font-bold text-white">J</span>
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold text-white">
-              {callActive ? "APPEL EN COURS" : "JARVIS"}
-            </h1>
-            <div className="flex items-center gap-1.5">
-              <div className={`w-2 h-2 rounded-full ${callActive ? "bg-[var(--error-red)] animate-pulse-dot" : "bg-[var(--success-green)] animate-pulse-dot"}`} />
-              <span className="text-xs text-[var(--jarvis-muted)]">
-                {callActive
-                  ? callState === "listening" ? "Ecoute..."
-                  : callState === "thinking" ? "Reflexion..."
-                  : callState === "speaking" ? "Parle..."
-                  : "En ligne"
-                  : "En ligne"}
-              </span>
+    <div className="h-screen flex">
+      {/* Sidebar overlay mobile */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+        <div className="p-4 border-b border-[var(--jarvis-border)]">
+          <h2 className="text-xs font-semibold text-[var(--jarvis-muted)] uppercase tracking-wider">Agents</h2>
+        </div>
+        <nav className="flex-1 overflow-y-auto p-2 space-y-1">
+          {agents.map((agent) => (
+            <button
+              key={agent.id}
+              onClick={() => switchAgent(agent.id)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${
+                agent.id === activeAgentId
+                  ? "bg-[var(--jarvis-blue)]/15 text-white"
+                  : "text-[var(--jarvis-muted)] hover:bg-[var(--jarvis-border)]/50 hover:text-white"
+              }`}
+            >
+              <div className={`w-8 h-8 rounded-lg ${agentColor(agent.id)} flex items-center justify-center shrink-0`}>
+                <span className="text-sm font-bold text-white">{agent.label.charAt(0)}</span>
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-medium truncate">{agent.label}</div>
+                <div className="text-[10px] text-[var(--jarvis-muted)] truncate">{agent.description}</div>
+              </div>
+              {agent.id === activeAgentId && (
+                <div className="w-2 h-2 rounded-full bg-[var(--jarvis-blue)] shrink-0 ml-auto" />
+              )}
+            </button>
+          ))}
+          {agents.length === 0 && (
+            <div className="text-xs text-[var(--jarvis-muted)] text-center py-4">Chargement...</div>
+          )}
+        </nav>
+      </aside>
+
+      {/* Main area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <header className="flex items-center justify-between px-4 py-3 border-b border-[var(--jarvis-border)] bg-[var(--jarvis-card)]">
+          <div className="flex items-center gap-3">
+            {/* Hamburger menu mobile */}
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="w-9 h-9 rounded-xl bg-[var(--jarvis-dark)] flex items-center justify-center md:hidden border border-[var(--jarvis-border)]"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+            <div className={`w-9 h-9 rounded-xl ${agentColor(activeAgentId)} flex items-center justify-center`}>
+              <span className="text-lg font-bold text-white">{activeInitial}</span>
+            </div>
+            <div>
+              <h1 className="text-sm font-semibold text-white">
+                {callActive ? "APPEL EN COURS" : activeLabel.toUpperCase()}
+              </h1>
+              <div className="flex items-center gap-1.5">
+                <div className={`w-2 h-2 rounded-full ${callActive ? "bg-[var(--error-red)] animate-pulse-dot" : switchingAgent ? "bg-[var(--warning-orange)] animate-pulse-dot" : "bg-[var(--success-green)] animate-pulse-dot"}`} />
+                <span className="text-xs text-[var(--jarvis-muted)]">
+                  {switchingAgent ? "Chargement..."
+                    : callActive
+                    ? callState === "listening" ? "Ecoute..."
+                    : callState === "thinking" ? "Reflexion..."
+                    : callState === "speaking" ? "Parle..."
+                    : "En ligne"
+                    : "En ligne"}
+                </span>
+              </div>
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleLogout}
-            className="text-xs text-[var(--jarvis-muted)] hover:text-white px-3 py-1.5 rounded-lg hover:bg-[var(--jarvis-border)] transition-colors"
-          >
-            Deconnexion
-          </button>
-        </div>
-      </header>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleLogout}
+              className="text-xs text-[var(--jarvis-muted)] hover:text-white px-3 py-1.5 rounded-lg hover:bg-[var(--jarvis-border)] transition-colors"
+            >
+              Deconnexion
+            </button>
+          </div>
+        </header>
 
       {/* Call mode overlay with animated orb */}
       {callActive && (
@@ -747,7 +903,7 @@ export default function Home() {
             </div>
             <h2 className="text-lg font-semibold text-white mb-2">Bienvenue</h2>
             <p className="text-[var(--jarvis-muted)] text-sm max-w-xs">
-              Ecrivez un message pour commencer une conversation avec Jarvis.
+              Ecrivez un message pour commencer une conversation avec {activeLabel}.
               L&apos;historique est partage avec votre application mobile.
             </p>
           </div>
@@ -805,6 +961,28 @@ export default function Home() {
         <div ref={chatEndRef} />
       </div>
 
+      {/* Pending image preview */}
+      {pendingImage && (
+        <div className="flex items-center gap-2 px-3 py-2 border-t border-[var(--jarvis-border)] bg-[var(--jarvis-dark)]">
+          <div className="w-10 h-10 rounded-lg bg-[var(--jarvis-card)] border border-[var(--jarvis-border)] flex items-center justify-center overflow-hidden">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--jarvis-muted)" strokeWidth="1.5">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+          </div>
+          <span className="text-xs text-[var(--jarvis-muted)] truncate flex-1">{pendingImageName}</span>
+          <button
+            type="button"
+            onClick={clearPendingImage}
+            className="text-[var(--jarvis-muted)] hover:text-[var(--error-red)] text-lg transition-colors"
+            title="Supprimer l'image"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
       {/* Input */}
       <form
         onSubmit={handleSend}
@@ -823,12 +1001,39 @@ export default function Home() {
         >
           📞
         </button>
+
+        {/* Bouton Image */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleImageSelect}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={sending || callActive}
+          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all shrink-0 ${
+            pendingImage
+              ? "bg-[var(--jarvis-blue)]/20 text-[var(--jarvis-blue)] border border-[var(--jarvis-blue)]/40"
+              : "bg-[var(--jarvis-dark)] text-[var(--jarvis-muted)] border border-[var(--jarvis-border)] hover:text-white hover:border-[var(--jarvis-muted)]"
+          } disabled:opacity-30`}
+          title="Joindre une image"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+        </button>
+
         <input
           ref={inputRef}
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ecrivez a Jarvis..."
+          placeholder={pendingImage ? `Decrivez l'image pour ${activeLabel}...` : `Ecrivez a ${activeLabel}...`}
           disabled={sending || callActive}
           className="flex-1 px-4 py-2.5 bg-[var(--jarvis-dark)] border border-[var(--jarvis-border)] rounded-xl text-white placeholder:text-[var(--jarvis-muted)] focus:outline-none focus:border-[var(--jarvis-blue)] transition-colors disabled:opacity-50"
           autoFocus
@@ -841,6 +1046,7 @@ export default function Home() {
           {sending ? "..." : "Envoyer"}
         </button>
       </form>
+      </div>
     </div>
   );
 }

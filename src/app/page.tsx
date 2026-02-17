@@ -76,6 +76,7 @@ export default function Home() {
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [pendingImageName, setPendingImageName] = useState<string | null>(null);
+  const [pendingFileType, setPendingFileType] = useState<string>("image/jpeg");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Call mode state
@@ -240,13 +241,21 @@ export default function Home() {
     setLoadingHistory(false);
   }, []);
 
-  // Handle image selection
-  function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
+  // Handle file selection (image or PDF)
+  const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) return;
-    if (file.size > 10 * 1024 * 1024) {
-      alert("Image trop volumineuse (max 10 Mo)");
+    if (!allowedTypes.includes(file.type)) {
+      alert("Format non supporte. Utilisez une image (JPG, PNG, GIF, WebP) ou un PDF.");
+      e.target.value = "";
+      return;
+    }
+    const maxSize = file.type === "application/pdf" ? 20 * 1024 * 1024 : 10 * 1024 * 1024;
+    if (file.size > maxSize) {
+      alert(`Fichier trop volumineux (max ${file.type === "application/pdf" ? "20" : "10"} Mo)`);
+      e.target.value = "";
       return;
     }
     const reader = new FileReader();
@@ -255,6 +264,7 @@ export default function Home() {
       const base64 = result.split(",")[1];
       setPendingImage(base64);
       setPendingImageName(file.name);
+      setPendingFileType(file.type);
     };
     reader.readAsDataURL(file);
     e.target.value = "";
@@ -263,6 +273,7 @@ export default function Home() {
   function clearPendingImage() {
     setPendingImage(null);
     setPendingImageName(null);
+    setPendingFileType("image/jpeg");
   }
 
   // Send message
@@ -273,9 +284,11 @@ export default function Home() {
     const userMsg = input.trim();
     const imageToSend = pendingImage;
     const imageName = pendingImageName;
+    const fileType = pendingFileType;
     setInput("");
     setPendingImage(null);
     setPendingImageName(null);
+    setPendingFileType("image/jpeg");
     setSending(true);
 
     // Ajouter le message utilisateur immediatement
@@ -294,7 +307,7 @@ export default function Home() {
       const bodyPayload: Record<string, string> = { message: userMsg, agentId: activeAgentId };
       if (imageToSend) {
         bodyPayload.image = imageToSend;
-        bodyPayload.imageType = "image/jpeg";
+        bodyPayload.imageType = fileType;
       }
 
       const res = await fetch("/api/chat", {
@@ -1050,15 +1063,24 @@ export default function Home() {
         <div ref={chatEndRef} />
       </div>
 
-      {/* Pending image preview */}
+      {/* Pending file preview */}
       {pendingImage && (
         <div className="flex items-center gap-2 px-3 py-2 border-t border-[var(--jarvis-border)] bg-[var(--jarvis-dark)]">
           <div className="w-10 h-10 rounded-lg bg-[var(--jarvis-card)] border border-[var(--jarvis-border)] flex items-center justify-center overflow-hidden">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--jarvis-muted)" strokeWidth="1.5">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <circle cx="8.5" cy="8.5" r="1.5" />
-              <path d="M21 15l-5-5L5 21" />
-            </svg>
+            {pendingFileType === "application/pdf" ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--error-red)" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="9" y1="15" x2="15" y2="15" />
+                <line x1="9" y1="11" x2="15" y2="11" />
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--jarvis-muted)" strokeWidth="1.5">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <path d="M21 15l-5-5L5 21" />
+              </svg>
+            )}
           </div>
           <span className="text-xs text-[var(--jarvis-muted)] truncate flex-1">{pendingImageName}</span>
           <button
@@ -1149,12 +1171,12 @@ export default function Home() {
           )}
         </div>
 
-        {/* Bouton Image */}
+        {/* Bouton Fichier (Image + PDF) */}
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
-          onChange={handleImageSelect}
+          accept="image/*,application/pdf"
+          onChange={handleFileSelect}
           className="hidden"
         />
         <button
@@ -1166,7 +1188,7 @@ export default function Home() {
               ? "bg-[var(--jarvis-blue)]/20 text-[var(--jarvis-blue)] border border-[var(--jarvis-blue)]/40"
               : "bg-[var(--jarvis-dark)] text-[var(--jarvis-muted)] border border-[var(--jarvis-border)] hover:text-white hover:border-[var(--jarvis-muted)]"
           } disabled:opacity-30`}
-          title="Joindre une image"
+          title="Joindre un fichier (image ou PDF)"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -1180,7 +1202,7 @@ export default function Home() {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={pendingImage ? `Decrivez l'image pour ${activeLabel}...` : `Ecrivez a ${activeLabel}...`}
+          placeholder={pendingImage ? (pendingFileType === "application/pdf" ? `Question sur le PDF pour ${activeLabel}...` : `Decrivez l'image pour ${activeLabel}...`) : `Ecrivez a ${activeLabel}...`}
           disabled={sending || callActive}
           className="flex-1 px-4 py-2.5 bg-[var(--jarvis-dark)] border border-[var(--jarvis-border)] rounded-xl text-white placeholder:text-[var(--jarvis-muted)] focus:outline-none focus:border-[var(--jarvis-blue)] transition-colors disabled:opacity-50"
           autoFocus

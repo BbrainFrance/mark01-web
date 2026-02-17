@@ -483,20 +483,63 @@ export default function Home() {
     };
   }, []);
 
-  // TTS: prononcer un texte et attendre la fin
-  function speakText(text: string): Promise<void> {
+  // TTS: prononcer un texte via OpenAI TTS (fallback navigateur)
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  async function speakText(text: string): Promise<void> {
+    // Arreter tout audio en cours
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
+    synthRef.current?.cancel();
+
+    // Tenter OpenAI TTS via /api/tts
+    if (authToken) {
+      try {
+        const res = await fetch("/api/tts", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${authToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ text, voice: "onyx" }),
+        });
+
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          return new Promise((resolve) => {
+            const audio = new Audio(url);
+            ttsAudioRef.current = audio;
+            audio.onended = () => {
+              URL.revokeObjectURL(url);
+              ttsAudioRef.current = null;
+              resolve();
+            };
+            audio.onerror = () => {
+              URL.revokeObjectURL(url);
+              ttsAudioRef.current = null;
+              resolve();
+            };
+            audio.play().catch(() => resolve());
+          });
+        }
+      } catch {
+        // Fallback vers TTS navigateur
+      }
+    }
+
+    // Fallback: SpeechSynthesis du navigateur
     return new Promise((resolve) => {
       const synth = synthRef.current;
       if (!synth) { resolve(); return; }
-
-      synth.cancel(); // Couper tout TTS en cours
 
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = "fr-FR";
       utterance.rate = 1.05;
       utterance.pitch = 0.95;
 
-      // Utiliser la voix preselectionnee
       if (jarvisVoiceRef.current) {
         utterance.voice = jarvisVoiceRef.current;
       }

@@ -799,8 +799,13 @@ export default function Home() {
     return agentIcons[id] || "\u{1F4AC}";
   }
 
+  // Separer les agents normaux et les buckets memoire
+  const bucketIds = ["bucket-brainstorming", "bucket-todo", "bucket-reunion"];
+  const bucketAgents = agents.filter(a => bucketIds.includes(a.id));
+  const regularAgents = agents.filter(a => !bucketIds.includes(a.id));
+
   // Trier : Jarvis en premier, puis alphabetique
-  const sortedAgents = [...agents].sort((a, b) => {
+  const sortedAgents = [...regularAgents].sort((a, b) => {
     if (a.id === "jarvis") return -1;
     if (b.id === "jarvis") return 1;
     return a.label.localeCompare(b.label);
@@ -903,7 +908,24 @@ export default function Home() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            {bucketAgents.map((bucket) => (
+              <button
+                key={bucket.id}
+                onClick={() => switchAgent(bucket.id)}
+                title={bucket.label}
+                className={`w-8 h-8 rounded-lg flex items-center justify-center text-base transition-all ${
+                  bucket.id === activeAgentId
+                    ? "bg-[var(--jarvis-blue)]/20 ring-1 ring-[var(--jarvis-blue)]"
+                    : "hover:bg-[var(--jarvis-border)]/50"
+                }`}
+              >
+                {getAgentIcon(bucket.id)}
+              </button>
+            ))}
+            {bucketAgents.length > 0 && (
+              <div className="w-px h-5 bg-[var(--jarvis-border)] mx-1" />
+            )}
             <button
               onClick={handleLogout}
               className="text-xs text-[var(--jarvis-muted)] hover:text-white px-3 py-1.5 rounded-lg hover:bg-[var(--jarvis-border)] transition-colors"

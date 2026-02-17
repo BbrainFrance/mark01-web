@@ -69,6 +69,15 @@ export default function Home() {
   });
   const [switchingAgent, setSwitchingAgent] = useState(false);
 
+  // Create agent modal
+  const [showCreateAgent, setShowCreateAgent] = useState(false);
+  const [newAgentId, setNewAgentId] = useState("");
+  const [newAgentLabel, setNewAgentLabel] = useState("");
+  const [newAgentDesc, setNewAgentDesc] = useState("");
+  const [newAgentSystem, setNewAgentSystem] = useState("");
+  const [creatingAgent, setCreatingAgent] = useState(false);
+  const [createAgentError, setCreateAgentError] = useState("");
+
   // Chat state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -146,6 +155,48 @@ export default function Home() {
     setMessages([]);
     await loadChatHistory(authToken, agentId);
     setSwitchingAgent(false);
+  }
+
+  // Create new agent
+  async function handleCreateAgent(e: React.FormEvent) {
+    e.preventDefault();
+    if (!authToken || !newAgentId.trim() || !newAgentLabel.trim()) return;
+    setCreatingAgent(true);
+    setCreateAgentError("");
+
+    try {
+      const res = await fetch("/api/agents", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          id: newAgentId.trim(),
+          label: newAgentLabel.trim(),
+          description: newAgentDesc.trim(),
+          system: newAgentSystem.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setShowCreateAgent(false);
+        setNewAgentId("");
+        setNewAgentLabel("");
+        setNewAgentDesc("");
+        setNewAgentSystem("");
+        await loadAgents(authToken);
+        if (data.agent?.id) {
+          switchAgent(data.agent.id);
+        }
+      } else {
+        setCreateAgentError(data.error || "Erreur inconnue");
+      }
+    } catch {
+      setCreateAgentError("Erreur de connexion");
+    }
+    setCreatingAgent(false);
   }
 
   // Verify existing token
@@ -845,6 +896,15 @@ export default function Home() {
         <div className="p-3 border-b border-[var(--jarvis-border)] flex items-center sidebar-header-content gap-2">
           <h2 className="sidebar-header-text text-xs font-semibold text-[var(--jarvis-muted)] uppercase tracking-wider flex-1">Agents</h2>
           <button
+            onClick={() => setShowCreateAgent(true)}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--jarvis-muted)] hover:text-[var(--success-green)] hover:bg-[var(--jarvis-border)]/50 transition-colors shrink-0"
+            title="Creer un agent"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          <button
             onClick={toggleSidebarCollapse}
             className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--jarvis-muted)] hover:text-white hover:bg-[var(--jarvis-border)]/50 transition-colors shrink-0 hidden md:flex"
             title={sidebarCollapsed ? "Agrandir" : "Reduire"}
@@ -1216,6 +1276,83 @@ export default function Home() {
         </button>
       </form>
       </div>
+
+      {/* Modal creation d'agent */}
+      {showCreateAgent && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setShowCreateAgent(false)}>
+          <div className="bg-[var(--jarvis-card)] border border-[var(--jarvis-border)] rounded-2xl w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 border-b border-[var(--jarvis-border)]">
+              <h3 className="text-lg font-semibold text-white">Nouvel agent</h3>
+              <p className="text-xs text-[var(--jarvis-muted)] mt-1">Creez un agent specialise avec son propre systeme et historique.</p>
+            </div>
+            <form onSubmit={handleCreateAgent} className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-[var(--jarvis-muted)] mb-1">ID (slug)</label>
+                  <input
+                    type="text"
+                    value={newAgentId}
+                    onChange={(e) => setNewAgentId(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}
+                    placeholder="mon-agent"
+                    className="w-full px-3 py-2 bg-[var(--jarvis-dark)] border border-[var(--jarvis-border)] rounded-lg text-white text-sm placeholder:text-[var(--jarvis-muted)] focus:outline-none focus:border-[var(--jarvis-blue)]"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-[var(--jarvis-muted)] mb-1">Nom</label>
+                  <input
+                    type="text"
+                    value={newAgentLabel}
+                    onChange={(e) => setNewAgentLabel(e.target.value)}
+                    placeholder="Mon Agent"
+                    className="w-full px-3 py-2 bg-[var(--jarvis-dark)] border border-[var(--jarvis-border)] rounded-lg text-white text-sm placeholder:text-[var(--jarvis-muted)] focus:outline-none focus:border-[var(--jarvis-blue)]"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-[var(--jarvis-muted)] mb-1">Description</label>
+                <input
+                  type="text"
+                  value={newAgentDesc}
+                  onChange={(e) => setNewAgentDesc(e.target.value)}
+                  placeholder="Agent specialise en..."
+                  className="w-full px-3 py-2 bg-[var(--jarvis-dark)] border border-[var(--jarvis-border)] rounded-lg text-white text-sm placeholder:text-[var(--jarvis-muted)] focus:outline-none focus:border-[var(--jarvis-blue)]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-[var(--jarvis-muted)] mb-1">Instructions systeme (optionnel)</label>
+                <textarea
+                  value={newAgentSystem}
+                  onChange={(e) => setNewAgentSystem(e.target.value)}
+                  placeholder="Tu es un expert en... Tu dois toujours..."
+                  rows={4}
+                  className="w-full px-3 py-2 bg-[var(--jarvis-dark)] border border-[var(--jarvis-border)] rounded-lg text-white text-sm placeholder:text-[var(--jarvis-muted)] focus:outline-none focus:border-[var(--jarvis-blue)] resize-none"
+                />
+              </div>
+              {createAgentError && (
+                <p className="text-[var(--error-red)] text-sm">{createAgentError}</p>
+              )}
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateAgent(false)}
+                  className="px-4 py-2 text-sm text-[var(--jarvis-muted)] hover:text-white rounded-lg hover:bg-[var(--jarvis-border)]/50 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingAgent || !newAgentId.trim() || !newAgentLabel.trim()}
+                  className="px-4 py-2 text-sm bg-[var(--jarvis-blue)] hover:bg-blue-600 disabled:opacity-40 rounded-lg text-white font-medium transition-colors"
+                >
+                  {creatingAgent ? "Creation..." : "Creer l'agent"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

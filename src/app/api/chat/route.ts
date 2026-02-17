@@ -1,61 +1,69 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken } from "@/lib/auth";
 
-const MARK01_API_URL = process.env.MARK01_API_URL || "https://mark01-api.jarvisfirstproto.cloud";
-const MARK01_API_KEY = process.env.MARK01_API_KEY || "";
+const MARK2_API_URL = process.env.MARK2_API_URL || process.env.MARK01_API_URL || "http://76.13.42.188:3456";
+const MARK2_API_KEY = process.env.MARK2_API_KEY || process.env.MARK01_API_KEY || "";
 
-const headers = {
-  "Authorization": `Bearer ${MARK01_API_KEY}`,
+const mark2Headers = {
+  "Authorization": `Bearer ${MARK2_API_KEY}`,
   "Content-Type": "application/json",
 };
 
-// GET - Recuperer l'historique (mark01-api + openclaw)
+// GET - Recuperer l'historique depuis Mark2
 export async function GET(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace("Bearer ", "");
   if (!token || !(await verifyToken(token))) {
     return NextResponse.json({ error: "Non autorise" }, { status: 401 });
   }
 
+  const agentId = req.nextUrl.searchParams.get("agentId") || "jarvis";
+
   try {
-    // Recuperer les deux sources en parallele
-    const [localRes, openclawRes] = await Promise.allSettled([
-      fetch(`${MARK01_API_URL}/chat-history`, { headers }),
-      fetch(`${MARK01_API_URL}/openclaw-history`, { headers }),
-    ]);
+    const res = await fetch(`${MARK2_API_URL}/history/${agentId}?limit=100`, {
+      headers: mark2Headers,
+    });
 
-    const localMessages =
-      localRes.status === "fulfilled" && localRes.value.ok
-        ? (await localRes.value.json()).messages || []
-        : [];
+    if (!res.ok) {
+      return NextResponse.json({ messages: [] });
+    }
 
-    const openclawMessages =
-      openclawRes.status === "fulfilled" && openclawRes.value.ok
-        ? (await openclawRes.value.json()).messages || []
-        : [];
+    const data = await res.json();
+    const mark2Messages = data.messages || [];
 
-    // Fusionner et dedupliquer par timestamp + userMessage
-    const seen = new Set<string>();
-    const all = [...openclawMessages, ...localMessages];
-    const unique = [];
+    // Convertir le format Mark2 en format attendu par le front
+    // Mark2 stocke des messages individuels {role, content, timestamp, source}
+    // Le front attend des paires {userMessage, jarvisResponse}
+    const paired: Array<{
+      id: string;
+      source: string;
+      userMessage: string;
+      jarvisResponse: string;
+      timestamp: number;
+    }> = [];
 
-    for (const msg of all) {
-      const key = `${msg.timestamp}-${msg.userMessage?.slice(0, 50)}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        unique.push(msg);
+    for (let i = 0; i < mark2Messages.length; i++) {
+      const msg = mark2Messages[i];
+      if (msg.role === "user") {
+        const next = mark2Messages[i + 1];
+        const jarvisResponse = next && next.role === "assistant" ? next.content : "";
+        paired.push({
+          id: `mark2-${msg.timestamp}-${i}`,
+          source: msg.source || "WEB",
+          userMessage: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
+          jarvisResponse: typeof jarvisResponse === "string" ? jarvisResponse : JSON.stringify(jarvisResponse),
+          timestamp: msg.timestamp,
+        });
+        if (next && next.role === "assistant") i++;
       }
     }
 
-    // Trier par timestamp
-    unique.sort((a: { timestamp: number }, b: { timestamp: number }) => a.timestamp - b.timestamp);
-
-    return NextResponse.json({ messages: unique });
+    return NextResponse.json({ messages: paired });
   } catch {
     return NextResponse.json({ messages: [] });
   }
 }
 
-// POST - Envoyer un message et sauvegarder dans l'historique VPS
+// POST - Envoyer un message via Mark2
 export async function POST(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace("Bearer ", "");
   if (!token || !(await verifyToken(token))) {
@@ -63,63 +71,50 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { message, source } = await req.json();
+    const { message, source, agentId } = await req.json();
 
     if (!message || typeof message !== "string" || !message.trim()) {
       return NextResponse.json({ error: "Message vide" }, { status: 400 });
     }
 
     const msgSource = source === "APPEL" ? "APPEL" : "WEB";
-    const msgId = `${msgSource.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const effectiveAgentId = agentId || "jarvis";
 
-    // Sauvegarder le message utilisateur dans l'historique VPS
-    await fetch(`${MARK01_API_URL}/chat-history`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        message: {
-          id: msgId,
-          source: msgSource,
-          userMessage: message.trim(),
-          jarvisResponse: "",
-          timestamp: Date.now(),
-        },
-      }),
-    }).catch(() => {});
-
-    // Envoyer au mark01-api pour obtenir la reponse de Jarvis
+    // Envoyer directement a Mark2 - il gere l'historique automatiquement
     let jarvisResponse = "Erreur de communication avec Jarvis.";
+    let responseModel = "";
 
     try {
-      const apiResponse = await fetch(`${MARK01_API_URL}/voice-code`, {
+      const apiResponse = await fetch(`${MARK2_API_URL}/chat`, {
         method: "POST",
-        headers,
+        headers: mark2Headers,
         body: JSON.stringify({
-          prompt: message.trim(),
-          mode: "text",
-          response_format: msgSource === "APPEL" ? "tts" : "text",
+          message: message.trim(),
+          agentId: effectiveAgentId,
+          source: msgSource,
         }),
       });
 
       if (apiResponse.ok) {
         const data = await apiResponse.json();
-        jarvisResponse = data.response || data.details || jarvisResponse;
+        jarvisResponse = data.response || jarvisResponse;
+        responseModel = data.model || "";
       } else {
-        const errorText = await apiResponse.text().catch(() => "");
-        jarvisResponse = `Erreur ${apiResponse.status}: ${errorText.slice(0, 200)}`;
+        const errorData = await apiResponse.json().catch(() => ({ error: "Erreur inconnue" }));
+        jarvisResponse = `Erreur ${apiResponse.status}: ${errorData.error || ""}`;
       }
     } catch (e) {
       jarvisResponse = `Erreur de connexion: ${e instanceof Error ? e.message : "inconnue"}`;
     }
 
-    // Mettre a jour l'historique avec la reponse
-    await fetch(`${MARK01_API_URL}/chat-history`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ id: msgId, jarvisResponse }),
-    }).catch(() => {});
+    const msgId = `${msgSource.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    return NextResponse.json({ id: msgId, response: jarvisResponse });
+    return NextResponse.json({
+      id: msgId,
+      response: jarvisResponse,
+      model: responseModel,
+      agentId: effectiveAgentId,
+    });
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Erreur inconnue";
     return NextResponse.json({ error: errMsg }, { status: 500 });

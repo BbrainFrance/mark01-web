@@ -61,6 +61,12 @@ export default function Home() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [activeAgentId, setActiveAgentId] = useState("jarvis");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("sidebar_collapsed") === "true";
+    }
+    return false;
+  });
   const [switchingAgent, setSwitchingAgent] = useState(false);
 
   // Chat state
@@ -76,10 +82,13 @@ export default function Home() {
   const [callActive, setCallActive] = useState(false);
   const [callState, setCallState] = useState<CallState>("idle");
   const [callTranscript, setCallTranscript] = useState("");
+  const [callMenuOpen, setCallMenuOpen] = useState(false);
+  const [callBucketId, setCallBucketId] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const callActiveRef = useRef(false);
   const callLoopRunning = useRef(false);
+  const callBucketRef = useRef<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -98,6 +107,14 @@ export default function Home() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Close call menu on outside click
+  useEffect(() => {
+    if (!callMenuOpen) return;
+    function handleClick() { setCallMenuOpen(false); }
+    const timer = setTimeout(() => document.addEventListener("click", handleClick), 0);
+    return () => { clearTimeout(timer); document.removeEventListener("click", handleClick); };
+  }, [callMenuOpen]);
 
   // Load agents list
   async function loadAgents(token: string) {
@@ -511,8 +528,9 @@ export default function Home() {
         };
         setMessages((prev) => [...prev, newMsg]);
 
-        // Envoyer a Jarvis
+        // Envoyer a l'agent (ou bucket)
         setCallState("thinking");
+        const targetAgentId = callBucketRef.current || activeAgentId;
 
         try {
           const res = await fetch("/api/chat", {
@@ -521,7 +539,7 @@ export default function Home() {
               "Content-Type": "application/json",
               Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({ message: command.trim(), source: "APPEL", agentId: activeAgentId }),
+            body: JSON.stringify({ message: command.trim(), source: "APPEL", agentId: targetAgentId }),
           });
 
           if (!callActiveRef.current) break;
@@ -554,15 +572,23 @@ export default function Home() {
     }
   }
 
-  // Demarrer le mode appel
-  function startCallMode() {
+  // Demarrer le mode appel (normal ou bucket)
+  function startCallMode(bucketId?: string) {
     if (!authToken) return;
     callActiveRef.current = true;
+    callBucketRef.current = bucketId || null;
+    setCallBucketId(bucketId || null);
     setCallActive(true);
     setCallState("listening");
+    setCallMenuOpen(false);
 
-    // Confirmation vocale puis lancer la boucle
-    speakText("Mode appel active. Je t'ecoute.").then(() => {
+    const bucketLabels: Record<string, string> = {
+      "bucket-brainstorming": "brainstorming",
+      "bucket-todo": "prise de notes de taches",
+      "bucket-reunion": "compte-rendu de reunion",
+    };
+    const label = bucketId ? bucketLabels[bucketId] || bucketId : "appel";
+    speakText(`Mode ${label} active. Je t'ecoute.`).then(() => {
       callModeLoop(authToken);
     });
   }
@@ -570,21 +596,23 @@ export default function Home() {
   // Arreter le mode appel
   function endCallMode() {
     callActiveRef.current = false;
+    callBucketRef.current = null;
     setCallActive(false);
+    setCallBucketId(null);
     setCallState("idle");
     setCallTranscript("");
+    setCallMenuOpen(false);
 
-    // Couper le STT et TTS en cours
     recognitionRef.current?.abort();
     synthRef.current?.cancel();
   }
 
-  // Toggle mode appel
+  // Toggle mode appel : si actif -> raccrocher, sinon -> ouvrir le menu
   function toggleCallMode() {
     if (callActive) {
       endCallMode();
     } else {
-      startCallMode();
+      setCallMenuOpen(!callMenuOpen);
     }
   }
 
@@ -749,18 +777,39 @@ export default function Home() {
   const dateGroups = groupByDate(messages);
   const activeAgent = agents.find(a => a.id === activeAgentId);
   const activeLabel = activeAgent?.label || activeAgentId.charAt(0).toUpperCase() + activeAgentId.slice(1);
-  const activeInitial = activeLabel.charAt(0).toUpperCase();
 
-  // Agent icon colors (deterministic per agent id)
-  function agentColor(id: string) {
-    const colors = [
-      "bg-[var(--jarvis-blue)]", "bg-emerald-600", "bg-purple-600",
-      "bg-orange-600", "bg-pink-600", "bg-teal-600", "bg-indigo-600",
-      "bg-amber-600", "bg-rose-600", "bg-cyan-600",
-    ];
-    let hash = 0;
-    for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
-    return colors[Math.abs(hash) % colors.length];
+  // Icones par agent
+  const agentIcons: Record<string, string> = {
+    jarvis: "\u{1F916}",
+    paybrain: "\u{1F4B3}",
+    "paybrain-app": "\u{1F4F1}",
+    "paybrain-tpe": "\u{1F3EA}",
+    comptaapp: "\u{1F4CA}",
+    salesbrain: "\u{1F4C8}",
+    blockbrain: "\u{26D3}\uFE0F",
+    "businessplan-paybrain": "\u{1F4CB}",
+    tradebrain: "\u{1F4B9}",
+    swapdf: "\u{1F4C4}",
+    "bucket-brainstorming": "\u{1F4A1}",
+    "bucket-todo": "\u{2705}",
+    "bucket-reunion": "\u{1F4DD}",
+  };
+
+  function getAgentIcon(id: string) {
+    return agentIcons[id] || "\u{1F4AC}";
+  }
+
+  // Trier : Jarvis en premier, puis alphabetique
+  const sortedAgents = [...agents].sort((a, b) => {
+    if (a.id === "jarvis") return -1;
+    if (b.id === "jarvis") return 1;
+    return a.label.localeCompare(b.label);
+  });
+
+  function toggleSidebarCollapse() {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    localStorage.setItem("sidebar_collapsed", String(next));
   }
 
   return (
@@ -774,35 +823,47 @@ export default function Home() {
       )}
 
       {/* Sidebar */}
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="p-4 border-b border-[var(--jarvis-border)]">
-          <h2 className="text-xs font-semibold text-[var(--jarvis-muted)] uppercase tracking-wider">Agents</h2>
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+        <div className="p-3 border-b border-[var(--jarvis-border)] flex items-center sidebar-header-content gap-2">
+          <h2 className="sidebar-header-text text-xs font-semibold text-[var(--jarvis-muted)] uppercase tracking-wider flex-1">Agents</h2>
+          <button
+            onClick={toggleSidebarCollapse}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--jarvis-muted)] hover:text-white hover:bg-[var(--jarvis-border)]/50 transition-colors shrink-0 hidden md:flex"
+            title={sidebarCollapsed ? "Agrandir" : "Reduire"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              {sidebarCollapsed ? (
+                <><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></>
+              ) : (
+                <><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></>
+              )}
+            </svg>
+          </button>
         </div>
         <nav className="flex-1 overflow-y-auto p-2 space-y-1">
-          {agents.map((agent) => (
+          {sortedAgents.map((agent) => (
             <button
               key={agent.id}
               onClick={() => switchAgent(agent.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${
+              title={sidebarCollapsed ? `${agent.label} - ${agent.description}` : undefined}
+              className={`sidebar-agent-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${
                 agent.id === activeAgentId
                   ? "bg-[var(--jarvis-blue)]/15 text-white"
                   : "text-[var(--jarvis-muted)] hover:bg-[var(--jarvis-border)]/50 hover:text-white"
               }`}
             >
-              <div className={`w-8 h-8 rounded-lg ${agentColor(agent.id)} flex items-center justify-center shrink-0`}>
-                <span className="text-sm font-bold text-white">{agent.label.charAt(0)}</span>
-              </div>
-              <div className="min-w-0">
+              <span className="text-xl shrink-0" role="img">{getAgentIcon(agent.id)}</span>
+              <div className="sidebar-text min-w-0 flex-1">
                 <div className="text-sm font-medium truncate">{agent.label}</div>
                 <div className="text-[10px] text-[var(--jarvis-muted)] truncate">{agent.description}</div>
               </div>
               {agent.id === activeAgentId && (
-                <div className="w-2 h-2 rounded-full bg-[var(--jarvis-blue)] shrink-0 ml-auto" />
+                <div className="sidebar-text w-2 h-2 rounded-full bg-[var(--jarvis-blue)] shrink-0 ml-auto" />
               )}
             </button>
           ))}
           {agents.length === 0 && (
-            <div className="text-xs text-[var(--jarvis-muted)] text-center py-4">Chargement...</div>
+            <div className="text-xs text-[var(--jarvis-muted)] text-center py-4">...</div>
           )}
         </nav>
       </aside>
@@ -823,9 +884,7 @@ export default function Home() {
                 <line x1="3" y1="18" x2="21" y2="18" />
               </svg>
             </button>
-            <div className={`w-9 h-9 rounded-xl ${agentColor(activeAgentId)} flex items-center justify-center`}>
-              <span className="text-lg font-bold text-white">{activeInitial}</span>
-            </div>
+            <span className="text-2xl" role="img">{getAgentIcon(activeAgentId)}</span>
             <div>
               <h1 className="text-sm font-semibold text-white">
                 {callActive ? "APPEL EN COURS" : activeLabel.toUpperCase()}
@@ -871,10 +930,18 @@ export default function Home() {
             <div className="jarvis-orb-core" />
           </div>
 
+          {callBucketId && (
+            <div className="flex items-center gap-2 bg-[var(--jarvis-card)] px-3 py-1.5 rounded-full border border-[var(--jarvis-border)]">
+              <span className="text-sm">{getAgentIcon(callBucketId)}</span>
+              <span className="text-xs text-[var(--jarvis-text)] font-medium">
+                {callBucketId === "bucket-brainstorming" ? "Brainstorming" : callBucketId === "bucket-todo" ? "A Faire" : "Reunion"}
+              </span>
+            </div>
+          )}
           <p className="text-sm text-[var(--jarvis-muted)] mt-2">
             {callState === "listening" ? "Je vous ecoute..." :
              callState === "thinking" ? "Reflexion en cours..." :
-             callState === "speaking" ? "Jarvis repond..." :
+             callState === "speaking" ? (callBucketId ? "Enregistrement..." : `${activeLabel} repond...`) :
              "Mode appel actif"}
           </p>
           {callTranscript && callState === "listening" && (
@@ -988,19 +1055,77 @@ export default function Home() {
         onSubmit={handleSend}
         className="flex items-center gap-2 p-3 border-t border-[var(--jarvis-border)] bg-[var(--jarvis-card)]"
       >
-        {/* Bouton Appel */}
-        <button
-          type="button"
-          onClick={toggleCallMode}
-          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all shrink-0 ${
-            callActive
-              ? "bg-[var(--error-red)] text-white animate-pulse"
-              : "bg-[var(--jarvis-dark)] text-[var(--success-green)] border border-[var(--success-green)]/30 hover:border-[var(--success-green)] hover:bg-[var(--success-green)]/10"
-          }`}
-          title={callActive ? "Raccrocher" : "Mode Appel"}
-        >
-          📞
-        </button>
+        {/* Bouton Appel + Menu */}
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={toggleCallMode}
+            className={`w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all ${
+              callActive
+                ? "bg-[var(--error-red)] text-white animate-pulse"
+                : callMenuOpen
+                ? "bg-[var(--success-green)]/20 text-[var(--success-green)] border border-[var(--success-green)]"
+                : "bg-[var(--jarvis-dark)] text-[var(--success-green)] border border-[var(--success-green)]/30 hover:border-[var(--success-green)] hover:bg-[var(--success-green)]/10"
+            }`}
+            title={callActive ? "Raccrocher" : "Mode Appel / Buckets"}
+          >
+            {callActive ? "\u{1F4F5}" : "\u{1F4DE}"}
+          </button>
+
+          {/* Menu contextuel */}
+          {callMenuOpen && !callActive && (
+            <div className="absolute bottom-12 left-0 bg-[var(--jarvis-card)] border border-[var(--jarvis-border)] rounded-xl shadow-xl py-1 w-56 z-50">
+              <button
+                type="button"
+                onClick={() => startCallMode()}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-[var(--jarvis-text)] hover:bg-[var(--jarvis-border)]/50 transition-colors"
+              >
+                <span className="text-lg">{"\u{1F4DE}"}</span>
+                <div>
+                  <div className="font-medium">Appel {activeLabel}</div>
+                  <div className="text-[10px] text-[var(--jarvis-muted)]">Conversation vocale</div>
+                </div>
+              </button>
+              <div className="h-px bg-[var(--jarvis-border)] mx-3 my-1" />
+              <div className="px-4 py-1">
+                <span className="text-[10px] text-[var(--jarvis-muted)] uppercase tracking-wider">Buckets</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => startCallMode("bucket-brainstorming")}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-[var(--jarvis-text)] hover:bg-[var(--jarvis-border)]/50 transition-colors"
+              >
+                <span className="text-lg">{"\u{1F4A1}"}</span>
+                <div>
+                  <div className="font-medium">Brainstorming</div>
+                  <div className="text-[10px] text-[var(--jarvis-muted)]">Capture d&apos;idees</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => startCallMode("bucket-todo")}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-[var(--jarvis-text)] hover:bg-[var(--jarvis-border)]/50 transition-colors"
+              >
+                <span className="text-lg">{"\u{2705}"}</span>
+                <div>
+                  <div className="font-medium">A Faire</div>
+                  <div className="text-[10px] text-[var(--jarvis-muted)]">Capture de taches</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => startCallMode("bucket-reunion")}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-[var(--jarvis-text)] hover:bg-[var(--jarvis-border)]/50 transition-colors"
+              >
+                <span className="text-lg">{"\u{1F4DD}"}</span>
+                <div>
+                  <div className="font-medium">Reunion</div>
+                  <div className="text-[10px] text-[var(--jarvis-muted)]">Compte-rendu</div>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Bouton Image */}
         <input

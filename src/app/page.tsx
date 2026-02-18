@@ -897,6 +897,7 @@ export default function Home() {
     "businessplan-paybrain": "\u{1F4CB}",
     tradebrain: "\u{1F4B9}",
     swapdf: "\u{1F4C4}",
+    aifc: "🥊",
     "bucket-brainstorming": "\u{1F4A1}",
     "bucket-todo": "\u{2705}",
     "bucket-reunion": "\u{1F4DD}",
